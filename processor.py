@@ -1,30 +1,20 @@
-import pandas as pd
 from spotdl import Spotdl
 from pydub import AudioSegment
 import librosa
 import numpy as np
 import os
-import threading
-import queue
-import pygame
 import time
-from collections import deque
+import pygame
 
-class ConcurrentSongProcessor:
+class SongProcessor:
     def __init__(self):
         self.spot = Spotdl(
             client_id="1e7160661b5849e7a50f41de5b8f9ef1",
             client_secret="6c04a0251cda402688b667a8a4df52ec"
         )
-        self.chorus_queue = queue.Queue()  # Queue for processed chorus files
-        self.download_queue = queue.Queue()  # Queue for songs to be downloaded
-        self.processed_files = deque()  # Keep track of processed files for cleanup
-        self.is_running = True
-        self.current_playing = None
-        
-        # Initialize pygame mixer
-        pygame.mixer.init()
-        
+        self.queue_file = "song_queue.txt"
+        self.play_queue_file = "play_queue.txt"
+    
     def download_song(self, song_name, artist):
         try:
             search_query = f"{song_name} {artist}"
@@ -43,7 +33,7 @@ class ConcurrentSongProcessor:
         except Exception as e:
             print(f"Error downloading {song_name}: {e}")
             return None, None
-
+    
     def detect_chorus(self, audio_segment):
         try:
             samples = np.array(audio_segment.get_array_of_samples())
@@ -52,13 +42,6 @@ class ConcurrentSongProcessor:
                 samples = samples.reshape((-1, 2)).mean(axis=1)
             
             samples = samples.astype(float) / np.max(np.abs(samples))
-            
-            mel_spec = librosa.feature.melspectrogram(
-                y=samples,
-                sr=audio_segment.frame_rate,
-                n_mels=128,
-                fmax=8000
-            )
             
             onset_env = librosa.onset.onset_strength(
                 y=samples, 
@@ -84,7 +67,6 @@ class ConcurrentSongProcessor:
                 estimated_chorus = peak_times[
                     np.argmin(np.abs(peak_times - target_position))
                 ]
-                
                 print(f"Detected chorus at: {estimated_chorus/1000:.2f} seconds")
                 return estimated_chorus
             else:
@@ -95,11 +77,10 @@ class ConcurrentSongProcessor:
         except Exception as e:
             print(f"Error in chorus detection: {e}")
             return None
-
+    
     def extract_chorus(self, audio_segment, chorus_start_ms, duration_ms=60000, pre_chorus_duration=20000):
         try:
             post_chorus_duration = duration_ms - pre_chorus_duration
-            
             start_ms = max(0, int(chorus_start_ms - pre_chorus_duration))
             end_ms = min(int(chorus_start_ms + post_chorus_duration), len(audio_segment))
             
@@ -117,13 +98,12 @@ class ConcurrentSongProcessor:
         except Exception as e:
             print(f"Error extracting chorus: {e}")
             return None
-
+    
     def process_song(self, song_name, artist):
-        """Process a single song and add its chorus to the queue"""
         try:
             song_path, song_title = self.download_song(song_name, artist)
             if not song_path:
-                return
+                return None
 
             audio = AudioSegment.from_mp3(song_path)
             chorus_start = self.detect_chorus(audio)
@@ -132,88 +112,86 @@ class ConcurrentSongProcessor:
                 chorus = self.extract_chorus(audio, chorus_start)
                 
                 if chorus is not None:
-                    # Create chorus filename using song title
                     safe_title = "".join(c for c in song_title if c.isalnum() or c in (' ', '-', '_')).rstrip()
                     chorus_path = f"chorus_{safe_title}.wav"
                     
-                    # Save chorus to current working directory
                     chorus.export(chorus_path, format='wav')
+                    print(f"✓ Saved chorus from {song_title}")
                     
-                    # Add to queue and tracking
-                    self.chorus_queue.put(chorus_path)
-                    self.processed_files.append(chorus_path)
-                    print(f"✓ Added chorus from {song_title} to queue")
+                    # Clean up downloaded song
+                    os.remove(song_path)
+                    return chorus_path
             
-            # Clean up downloaded song
-            os.remove(song_path)
-            return True
+            if os.path.exists(song_path):
+                os.remove(song_path)
+            return None
             
         except Exception as e:
             print(f"Error processing {song_name}: {e}")
             if 'song_path' in locals() and os.path.exists(song_path):
                 os.remove(song_path)
-            return False
+            return None
 
-    def download_thread(self):
-        """Thread for downloading and processing songs"""
-        while self.is_running:
-            try:
-                song_info = self.download_queue.get(timeout=1)  # 1 second timeout
-                if song_info is None:  # Sentinel value
-                    break
-                    
-                song_name, artist = song_info
-                self.process_song(song_name, artist)
-                self.download_queue.task_done()
-                
-            except queue.Empty:
-                continue
-            except Exception as e:
-                print(f"Error in download thread: {e}")
-                continue
+    def get_next_song(self):
+        """Get and remove the first song from the queue"""
+        try:
+            with open(self.queue_file, 'r') as f:
+                lines = f.readlines()
+            
+            if not lines:
+                return None, None
+            
+            # Get first song
+            first_song = lines[0].strip()
+            song_name, artist = first_song.split('|')
+            
+            # Write remaining songs back to file
+            with open(self.queue_file, 'w') as f:
+                f.writelines(lines[1:])
+            
+            return song_name, artist
+            
+        except Exception as e:
+            print(f"Error getting next song: {e}")
+            return None, None
 
-    def playback_thread(self):
-        """Thread for playing processed chorus files"""
-        while self.is_running:
-            try:
-                if not pygame.mixer.music.get_busy():
-                    if self.current_playing:
-                        # Clean up previous file if it exists
-                        try:
-                            os.remove(self.current_playing)
-                            self.processed_files.popleft()
-                        except:
-                            pass
-                    
-                    # Get next chorus file
-                    next_chorus = self.chorus_queue.get(timeout=1)
-                    self.current_playing = next_chorus
-                    
-                    # Play the chorus
-                    pygame.mixer.music.load(next_chorus)
-                    pygame.mixer.music.play()
-                    print(f"► Playing chorus from: {next_chorus}")
-                    
-                time.sleep(0.1)  # Small delay to prevent busy waiting
-                
-            except queue.Empty:
-                if self.download_queue.empty() and self.chorus_queue.empty():
-                    print("No more songs to play")
-                    break
-                continue
-            except Exception as e:
-                print(f"Error in playback thread: {e}")
-                continue
+    def add_to_play_queue(self, chorus_path):
+        """Add processed chorus to play queue"""
+        try:
+            with open(self.play_queue_file, 'a') as f:
+                f.write(f"{chorus_path}\n")
+            print(f"Added to play queue: {chorus_path}")
+        except Exception as e:
+            print(f"Error adding to play queue: {e}")
 
-    def cleanup(self):
-        """Clean up any remaining temporary files"""
-        self.is_running = False
-        pygame.mixer.quit()
+    def run(self):
+        """Main loop for processing songs"""
+        print("Starting song processor...")
         
-        for file_path in self.processed_files:
+        while True:
             try:
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-                    print(f"Cleaned up: {file_path}")
+                # Get next song from queue
+                song_name, artist = self.get_next_song()
+                
+                if song_name and artist:
+                    print(f"\nProcessing: {song_name} by {artist}")
+                    chorus_path = self.process_song(song_name, artist)
+                    
+                    if chorus_path:
+                        self.add_to_play_queue(chorus_path)
+                    else:
+                        print(f"Failed to process song: {song_name}")
+                
+                time.sleep(0.1)  # Small delay
+                
+            except KeyboardInterrupt:
+                print("\nStopping processor...")
+                break
             except Exception as e:
-                print(f"Error cleaning up {file_path}: {e}")
+                print(f"Error in processor loop: {e}")
+                time.sleep(1)
+
+
+if __name__ == "__main__":
+    processor = SongProcessor()
+    processor.run()

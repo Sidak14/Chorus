@@ -22,5 +22,6 @@ df = pd.DataFrame(songs_data)
 
 # Save to Excel file
 df.to_excel('ed_sheeran_songs.xlsx', index=False)
+#df.to_csv('ed_sheeran_songs.csv', index=False)
 
 print("Spreadsheet created successfully!")
