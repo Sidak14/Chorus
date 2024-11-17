@@ -7,9 +7,8 @@ import numpy as np
 from pydub import AudioSegment
 import os
 import time
-from pathlib import Path
-import urllib.parse
 import tempfile
+import sys
 from dotenv import load_dotenv
 
 load_dotenv()  # Load environment variables from .env
@@ -86,8 +85,20 @@ class SpotifyQueueProcessor:
             
             queue = self.sp.queue()
             current_track = [current['item']] if current['item'] else []
-            queue_tracks = current_track + queue['queue'][:2]  # Current + next 2 songs
+            queue_tracks = current_track + queue['queue'][:6]  # Current + next 6 songs
             
+            # Kill switch check - if any song appears 6 times in the next 6 tracks
+            song_counts = {}
+            for track in queue_tracks:
+                track_id = track['id']
+                song_counts[track_id] = song_counts.get(track_id, 0) + 1
+                if song_counts[track_id] >= 6:
+                    print("\n⚠️ Emergency stop detected (song appears 6 times in queue)")
+                    print("Restoring normal Spotify playback...")
+                    self.sp.start_playback()
+                    print("Exiting program...")
+                    sys.exit(0)
+
             return queue_tracks
 
         except spotipy.exceptions.SpotifyException as e:

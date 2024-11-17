@@ -3,6 +3,7 @@ from spotipy.oauth2 import SpotifyOAuth
 import pandas as pd
 import time
 import os
+import sys
 from dotenv import load_dotenv
 
 load_dotenv()  # Load environment variables from .env
@@ -85,30 +86,33 @@ class SpotifyPlaybackController:
             
             # Count consecutive occurrences
             consecutive_count = 1
-            duplicates_to_remove = 0
             for track in queue['queue']:
                 if track['id'] == current_track_id:
                     consecutive_count += 1
-                    duplicates_to_remove += 1
                 else:
                     break
             
             print(f"\nFound {consecutive_count} consecutive occurrences of '{current_track_name}'")
             
-            # Clean up extra queue entries
+            # Normal cleanup and mode determination continues...
+            duplicates_to_remove = consecutive_count - 1
             if duplicates_to_remove > 0:
                 print(f"Removing {duplicates_to_remove} duplicate entries from queue...")
-                # Pause playback
                 self.sp.pause_playback()
-                time.sleep(0.1)  # Small delay to ensure pause takes effect
+                time.sleep(0.1)
                 
-                # Skip the duplicates
                 for _ in range(duplicates_to_remove):
                     self.sp.next_track()
                     time.sleep(0.1)
-                
-                # Don't resume here - let the main playback handler handle it
             
+            # Emergency kill switch if song is queued 6 times
+            if consecutive_count >= 6:
+                print("\n⚠️ Emergency stop detected (song queued 6 times)")
+                print("Restoring normal Spotify playback...")
+                self.sp.start_playback()  # Ensure playback is resumed
+                print("Exiting program...")
+                sys.exit(0)  # Clean exit
+
             # Determine playback mode
             if consecutive_count == 1:
                 return 'start-to-chorus'
