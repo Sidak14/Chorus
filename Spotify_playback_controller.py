@@ -3,6 +3,9 @@ from spotipy.oauth2 import SpotifyOAuth
 import pandas as pd
 import time
 import os
+from dotenv import load_dotenv
+
+load_dotenv()  # Load environment variables from .env
 
 class SpotifyPlaybackController:
     def __init__(self, client_id, client_secret):
@@ -80,10 +83,8 @@ class SpotifyPlaybackController:
             current_track_id = current['item']['id']
             current_track_name = current['item']['name']
             
-            # Count consecutive occurrences in queue
-            consecutive_count = 1  # Start with 1 for current playing track
-            
-            # Find consecutive duplicates
+            # Count consecutive occurrences
+            consecutive_count = 1
             duplicates_to_remove = 0
             for track in queue['queue']:
                 if track['id'] == current_track_id:
@@ -97,9 +98,16 @@ class SpotifyPlaybackController:
             # Clean up extra queue entries
             if duplicates_to_remove > 0:
                 print(f"Removing {duplicates_to_remove} duplicate entries from queue...")
+                # Pause playback
+                self.sp.pause_playback()
+                time.sleep(0.1)  # Small delay to ensure pause takes effect
+                
+                # Skip the duplicates
                 for _ in range(duplicates_to_remove):
-                    self.sp.next_track()  # Move to next track
-                    time.sleep(0.1)  # Small delay
+                    self.sp.next_track()
+                    time.sleep(0.1)
+                
+                # Don't resume here - let the main playback handler handle it
             
             # Determine playback mode
             if consecutive_count == 1:
@@ -116,7 +124,6 @@ class SpotifyPlaybackController:
             return 'chorus-only'
 
     def handle_playback(self):
-        """Handle playback state and skipping based on queue occurrences"""
         try:
             current = self.sp.current_playback()
             if not current or not current['is_playing']:
@@ -136,6 +143,17 @@ class SpotifyPlaybackController:
                 self.chorus_skipped = False
                 self.current_mode = playback_mode
                 self.load_queue_data(force=True)
+                
+                # Immediately skip to chorus if in chorus-only mode
+                if self.current_mode == 'chorus-only':
+                    chorus_start_ms, chorus_end_ms = self.get_track_chorus_times(current_track_id)
+                    if chorus_start_ms is not None:
+                        chorus_start_ms = int(chorus_start_ms)
+                        self.sp.seek_track(position_ms=chorus_start_ms)
+                        time.sleep(0.1)  # Tiny delay to ensure track has started
+                        self.chorus_skipped = True
+
+                self.sp.start_playback()
             
             chorus_start_ms, chorus_end_ms = self.get_track_chorus_times(current_track_id)
             
@@ -144,25 +162,23 @@ class SpotifyPlaybackController:
                 chorus_end_ms = int(chorus_end_ms)
                 
                 if self.current_mode == 'full-song':
-                    # Play entire song
-                    if progress_ms >= duration_ms - 2000:  # Near the end
+                    if progress_ms >= duration_ms - 2000:
                         print("Song finished, skipping to next track")
                         self.sp.next_track()
                         self.last_track_id = None
                         
                 elif self.current_mode == 'start-to-chorus':
-                    # Play from start until chorus ends
                     if progress_ms >= chorus_end_ms:
                         print("Reached chorus end, skipping to next track")
                         self.sp.next_track()
                         self.last_track_id = None
                         
                 else:  # chorus-only mode
-                    if not self.chorus_skipped and progress_ms > 2000:
+                    if not self.chorus_skipped:  # This is now a backup in case the immediate skip failed
                         print(f"Skipping to chorus at {chorus_start_ms/1000:.1f}s")
                         self.sp.seek_track(position_ms=chorus_start_ms)
                         self.chorus_skipped = True
-                    elif self.chorus_skipped and progress_ms >= chorus_end_ms:
+                    elif progress_ms >= chorus_end_ms:
                         print("Chorus finished, skipping to next track")
                         self.sp.next_track()
                         self.last_track_id = None
@@ -206,8 +222,8 @@ class SpotifyPlaybackController:
                 time.sleep(5)
 
 if __name__ == "__main__":
-    CLIENT_ID = "1e7160661b5849e7a50f41de5b8f9ef1"
-    CLIENT_SECRET = "6c04a0251cda402688b667a8a4df52ec"
+    CLIENT_ID = os.getenv('CLIENT_ID')
+    CLIENT_SECRET = os.getenv('CLIENT_SECRET')
     
     try:
         controller = SpotifyPlaybackController(CLIENT_ID, CLIENT_SECRET)

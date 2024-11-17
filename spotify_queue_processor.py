@@ -10,6 +10,11 @@ import time
 from pathlib import Path
 import urllib.parse
 import tempfile
+from dotenv import load_dotenv
+
+load_dotenv()  # Load environment variables from .env
+
+
 
 class SpotifyQueueProcessor:
     def __init__(self, client_id, client_secret):
@@ -226,8 +231,8 @@ class SpotifyQueueProcessor:
                 time.sleep(5)
 
 if __name__ == "__main__":
-    CLIENT_ID = "1e7160661b5849e7a50f41de5b8f9ef1"
-    CLIENT_SECRET = "6c04a0251cda402688b667a8a4df52ec"
+    CLIENT_ID = os.getenv('CLIENT_ID')
+    CLIENT_SECRET = os.getenv('CLIENT_SECRET')
     
     try:
         processor = SpotifyQueueProcessor(CLIENT_ID, CLIENT_SECRET)
